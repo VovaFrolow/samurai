@@ -48,10 +48,16 @@ model:
       model: vit_small_patch16_224
       features: vit_block12
       frozen: true
+    output_transform:
+      name: networks.two_layer_mlp
+      inp_dim: ${globals.FEAT_DIM}
+      outp_dim: ${globals.SLOT_DIM}
+      hidden_dim: "${mul: ${globals.FEAT_DIM}, 2}"
+      layer_norm: true
 
   grouper:
     name: SlotAttention
-    inp_dim: ${globals.FEAT_DIM}
+    inp_dim: ${globals.SLOT_DIM}
     slot_dim: ${globals.SLOT_DIM}
 
   decoder:
