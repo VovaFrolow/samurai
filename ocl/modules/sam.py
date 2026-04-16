@@ -296,12 +296,15 @@ class SAMImageMaskImprover(nn.Module):
         g_masks = None
 
         if self.use_box:
+            # print("use_bboxes")
             bboxes = self.extract_bboxes(masks, threshold=threshold_for_boxes).flatten(0, 1).unsqueeze(1)
 
         if self.use_point:
+            # print("use_points")
             points = self.get_reference_points(masks, threshold=threshold_for_points)
 
         if self.use_mask:
+            # print("use_masks")
             g_mask = self.extract_gauss_mask()
 
         # if self.is_sam2:

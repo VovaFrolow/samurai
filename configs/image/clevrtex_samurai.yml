@@ -1,5 +1,5 @@
-experiment_group: samsa
-experiment_name: clevrtex_rapid
+experiment_group: samurai
+experiment_name: clevrtex_samurai
 seed: 1
 
 globals:
