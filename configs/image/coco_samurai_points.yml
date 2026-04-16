@@ -184,29 +184,30 @@ val_metrics:
   #   matching: hungarian
   #   pred_key: decoder_masks_hard
   #   true_key: segmentations
-  sam_ari:
-    name: ImageARI
-    ignore_overlaps: true
-    pred_key: sam_masks_hard
-    true_key: segmentations
-  sam_fg_ari:
-    name: ImageARI
-    ignore_overlaps: true
-    ignore_background: true
-    pred_key: sam_masks_hard
-    true_key: segmentations
-  sam_mbo:
-    name: ImageIoU
-    ignore_overlaps: true
-    matching: overlap
-    pred_key: sam_masks_hard
-    true_key: segmentations
-  sam_miou:
-    name: ImageIoU
-    ignore_overlaps: true
-    matching: hungarian
-    pred_key: sam_masks_hard
-    true_key: segmentations
+  
+  # sam_ari:
+  #   name: ImageARI
+  #   ignore_overlaps: true
+  #   pred_key: sam_masks_hard
+  #   true_key: segmentations
+  # sam_fg_ari:
+  #   name: ImageARI
+  #   ignore_overlaps: true
+  #   ignore_background: true
+  #   pred_key: sam_masks_hard
+  #   true_key: segmentations
+  # sam_mbo:
+  #   name: ImageIoU
+  #   ignore_overlaps: true
+  #   matching: overlap
+  #   pred_key: sam_masks_hard
+  #   true_key: segmentations
+  # sam_miou:
+  #   name: ImageIoU
+  #   ignore_overlaps: true
+  #   matching: hungarian
+  #   pred_key: sam_masks_hard
+  #   true_key: segmentations
   # sam_fg_miou:
   #   name: ImageIoU
   #   ignore_overlaps: true
@@ -214,29 +215,30 @@ val_metrics:
   #   matching: hungarian
   #   pred_key: sam_masks_hard
   #   true_key: segmentations
-  slots_ari:
-    name: ImageARI
-    ignore_overlaps: true
-    pred_key: grouping_masks_hard
-    true_key: segmentations
-  slots_fg_ari:
-    name: ImageARI
-    ignore_overlaps: true
-    ignore_background: true
-    pred_key: grouping_masks_hard
-    true_key: segmentations
-  slots_mbo:
-    name: ImageIoU
-    ignore_overlaps: true
-    matching: overlap
-    pred_key: grouping_masks_hard
-    true_key: segmentations
-  slots_miou:
-    name: ImageIoU
-    ignore_overlaps: true
-    matching: hungarian
-    pred_key: grouping_masks_hard
-    true_key: segmentations
+  # slots_ari:
+  #   name: ImageARI
+  #   ignore_overlaps: true
+  #   pred_key: grouping_masks_hard
+  #   true_key: segmentations
+  # slots_fg_ari:
+  #   name: ImageARI
+  #   ignore_overlaps: true
+  #   ignore_background: true
+  #   pred_key: grouping_masks_hard
+  #   true_key: segmentations
+  # slots_mbo:
+  #   name: ImageIoU
+  #   ignore_overlaps: true
+  #   matching: overlap
+  #   pred_key: grouping_masks_hard
+  #   true_key: segmentations
+  # slots_miou:
+  #   name: ImageIoU
+  #   ignore_overlaps: true
+  #   matching: hungarian
+  #   pred_key: grouping_masks_hard
+  #   true_key: segmentations
+  
   # slots_fg_miou:
   #   name: ImageIoU
   #   ignore_overlaps: true
