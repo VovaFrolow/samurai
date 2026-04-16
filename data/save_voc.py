@@ -6,7 +6,7 @@ import tqdm
 from PIL import Image
 import torch.utils.data as data
 
-from data.utils import mkdir_if_missing, download_file_from_google_drive
+from utils import mkdir_if_missing, download_file_from_google_drive
 
 
 class VOC12(data.Dataset):

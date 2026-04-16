@@ -587,7 +587,9 @@ class TemporalGMM(nn.Module):
             gau_max: float = 2.0, 
             attn_smooth_size: int = 5,
             drop_rate: float = 0.2,
-            momentum: float = 0.25, # 0.9
+            logsigma_gate: float = 0.1, # 0.9
+            mu_gate: float = 0.1,
+            momentum: float = 0.2,
             eps: int = 1e-10, 
             use_mlp: bool = True,
             # chunk: int = 4,
@@ -596,6 +598,8 @@ class TemporalGMM(nn.Module):
         self.num_slots = num_slots
         self.dim = dim
         self.iters = iters
+        self.logsigma_gate = logsigma_gate
+        self.mu_gate = mu_gate
         self.momentum = momentum
         self.eps = eps
         
@@ -615,11 +619,13 @@ class TemporalGMM(nn.Module):
         self.p_mu = nn.Linear(dim, dim)
         
         # Диффузионные параметры
+        self.norm_diffusion_mu = nn.LayerNorm(dim * 2)
         self.diffusion_mu = nn.Sequential(
             nn.Linear(dim * 2, hidden_dim * 2),
-            nn.ReLU(), # nn.Tanh(),
+            nn.Tanh(),
             nn.Linear(hidden_dim * 2, dim)
         )
+        self.norm_diffusion_logsigma = nn.LayerNorm(dim * 2)
         self.diffusion_logsigma = nn.Sequential(
             nn.Linear(dim * 2, hidden_dim * 2),
             nn.ReLU(),
@@ -627,12 +633,20 @@ class TemporalGMM(nn.Module):
         )
         
         # Временные регуляризаторы
-        self.temp_attn = nn.MultiheadAttention(dim, num_heads=4, batch_first=True)
-        self.temp_norm = nn.LayerNorm(dim)
-        self.attn_norm = nn.LayerNorm(dim)
+        self.temp_attn_mu = nn.MultiheadAttention(dim, num_heads=4, dropout=0.1, batch_first=True)
+        # self.temp_attn_logsigma = nn.MultiheadAttention(dim, num_heads=4, batch_first=True)
+        self.temp_norm_mu = nn.LayerNorm(dim)
+        # self.temp_norm_logsigma = nn.LayerNorm(dim)
+        self.temp_norm_attn_mu = nn.LayerNorm(dim)
+        # self.temp_norm_attn_logsigma = nn.LayerNorm(dim)
         self.temp_mu = nn.Sequential(
             nn.Linear(dim, hidden_dim),
-            nn.ReLU(), # nn.GELU(),
+            nn.GELU(),
+            nn.Linear(hidden_dim, dim)
+        )
+        self.temp_logsigma = nn.Sequential(
+            nn.Linear(dim, hidden_dim),
+            nn.GELU(),
             nn.Linear(hidden_dim, dim)
         )
         
@@ -847,18 +861,19 @@ class TemporalGMM(nn.Module):
         # norm_logsigma = self.norm_slots(slots[..., self.dim:])
         # Гиперболическое проецирование параметров
         slots = self.norm_slots(slots)
-        norm_mu = slots[..., :self.dim]
+        norm_mu, norm_logsigma = slots[..., :self.dim], slots[..., self.dim:]
         slots_mu = self.hyperbolic_project(self.hyp_mu(norm_mu))
         # Для logsigma не требуется гиперболическое проецирование, так как это параметр масштаба
-        slots_logsigma = self.p_sigma(slots[..., self.dim:])
+        slots_logsigma = self.p_sigma(norm_logsigma)
         
         # Диффузионный процесс для параметров с временной зависимостью
         if prev_slots is not None:
             # norm_prev_mu = self.norm_slots(prev_slots[..., :self.dim])
             # norm_prev_logsigma = self.norm_slots(prev_slots[..., self.dim:])
             prev_slots = self.norm_slots(prev_slots)
-            prev_hyp_mu = self.hyperbolic_project(self.hyp_prev_mu(prev_slots[..., :self.dim]))
-            prev_logsigma = self.p_prev_sigma(prev_slots[..., self.dim:])
+            norm_prev_mu, norm_prev_logsigma = prev_slots[..., :self.dim], prev_slots[..., self.dim:]
+            prev_hyp_mu = self.hyperbolic_project(self.hyp_prev_mu(norm_prev_mu))
+            prev_logsigma = self.p_prev_sigma(norm_prev_logsigma)
             
             # Прогнозирование диффузии с ограничением градиентов для стабильности
             # mu_diff = self.diffusion_mu(torch.cat([prev_mu, slots_mu], -1))
@@ -872,10 +887,10 @@ class TemporalGMM(nn.Module):
             slots_mu_tangent = self.log_map(slots_mu, prev_hyp_mu)
             # Вычисляем дифференциал в касательном пространстве
             # Concat слотов в касательном пространстве и евклидового пространства логсигм
-            mu_tangent_input = torch.cat([slots_mu_tangent, prev_hyp_mu], -1)
+            mu_tangent_input = torch.cat([prev_hyp_mu, slots_mu_tangent], -1) # поменять порядок
             mu_tangent_diff = self.diffusion_mu(mu_tangent_input)
             # Для сигмы оставляем обычное евклидово пространство
-            logsigma_input = torch.cat([prev_logsigma, slots_logsigma], -1)
+            logsigma_input = torch.cat([prev_logsigma, slots_logsigma], -1) # поменять порядок
             logsigma_diff = self.diffusion_logsigma(logsigma_input)
             # 3. Геодезическая интерполяция в гиперболическом пространстве
             # Вычисляем целевую точку, добавляя дифференциал в касательном пространстве
@@ -888,15 +903,15 @@ class TemporalGMM(nn.Module):
             # Для сигмы используем обычное EMA (она в евклидовом пространстве)
             slots_logsigma = (1 - self.momentum) * slots_logsigma + self.momentum * (prev_logsigma + logsigma_diff) # prev_logsigma + sigma_diff * self.momentum # self.sigma_gate
 
-        slots_mu = self.temp_norm(self.euclidean_project(slots_hyp_mu))
+        slots_mu = self.euclidean_project(slots_hyp_mu) # self.temp_norm_mu(self.euclidean_project(slots_hyp_mu))
 
         # p_mu = self.p_mu(norm_mu)
         # Временная согласованность через attention механизм
         # Это помогает слотам «помнить» свою историю
-        temp_attn_mu, _ = self.temp_attn(
+        temp_attn_mu, _ = self.temp_attn_mu(
             slots_mu, 
-            slots_mu, 
-            slots_mu
+            k, 
+            v
         )
         # temp_attn_mu, _ = self.temp_attn(
         #     p_mu, 
@@ -911,7 +926,7 @@ class TemporalGMM(nn.Module):
         # updates = torch.einsum("bsf, bfd -> bsd", attn, values)
         # updated_mu = self.gru(temp_attn_mu.squeeze(1).flatten(0, 1), norm_mu.flatten(0, 1))
         # slots_mu = updated_mu.unflatten(0, norm_mu.shape[:2])
-        slots_mu = slots_mu + self.temp_mu(self.temp_norm(temp_attn_mu.squeeze(1)))
+        slots_mu = slots_mu + self.temp_mu(self.temp_norm_attn_mu(temp_attn_mu.squeeze(1)))
         # slots_mu = slots_mu + self.temp_mu(self.temp_norm(temp_attn_mu.squeeze(1)))
         # Обновляем центры с учетом self-attention и проецируем обратно
         # slots_hyp_mu = slots_hyp_mu + self.hyperbolic_project(temp_attn_mu.squeeze(1))

@@ -5,6 +5,7 @@ import pathlib
 import random
 import warnings
 import wandb
+import comet_ml
 from typing import Any, Dict, Optional
 
 import pytorch_lightning as pl
@@ -15,7 +16,7 @@ from pytorch_lightning.utilities import rank_zero_info as log_info
 
 from ocl import configuration, data, metrics, models, utils
 
-wandb.init(sync_tensorboard=True)
+# wandb.init(sync_tensorboard=True)
 RESULT_FINISHED = 0
 RESULT_TIMEOUT = 1
 
@@ -87,19 +88,48 @@ def _setup_callbacks(args, config, log_path: pathlib.Path, dataset=None) -> Dict
     return callbacks
 
 
-def _setup_loggers(args, log_path: pathlib.Path) -> Dict[str, pl.loggers.logger.Logger]:
+def _setup_loggers(args, log_path: pathlib.Path, config=None) -> Dict[str, pl.loggers.logger.Logger]:
     if args.dry:
         return {}
 
     loggers = {}
+    
+    # Comet ML Logger - для реального времени
+    try:
+        from pytorch_lightning.loggers import CometLogger
+        
+        comet_logger = CometLogger(
+            api_key="FXAkSZjhnizJwl1sx3ZesI7M0",
+            project_name=config.get("experiment_group", "default-project"),  # Используем группу экспериментов
+            experiment_name=config.get("experiment_name", f"exp-{random.randint(1000, 9999)}"),
+            save_dir=str(log_path),
+            # Критически важные параметры для реального времени:
+            # log_graph=True,                    # Логировать архитектуру модели
+            # log_env_details=True,              # Детали окружения
+            log_env_gpu=True,                  # Информация о GPU
+            log_env_cpu=True,                  # Информация о CPU
+            # log_env_host=True,                 # Информация о хосте
+            # parse_args=True,                   # Парсить аргументы командной строки
+            # Настройки для реального времени:
+            # upload_source_files=True,          # Загружать исходный код
+            # display_summary_level=2,           # Уровень детализации
+            online_mode=True,                  # Режим онлайн (обязательно!)
+        )
+        loggers["comet"] = comet_logger
+        log_info("Comet ML logger initialized in ONLINE mode for real-time monitoring")
+        
+    except ImportError:
+        log_info("Comet ML not installed, skipping Comet logging")
+    except Exception as e:
+        log_info(f"Failed to setup Comet ML: {e}")
+
+    # TensorBoard Logger
     if not args.no_tensorboard:
-        # Tensorboard logs go to <log_dir>/<tensorboard_subdir>/
         loggers["tensorboard"] = pl.loggers.TensorBoardLogger(
             save_dir=log_path, name=TENSORBOARD_SUBDIR, version=""
         )
 
-    # CSV logs go to <log_dir>/<metrics_subdir>/version_N/metrics.csv, where N is the number of
-    # restarts of the job
+    # CSV Logger
     loggers["csv"] = pl.loggers.CSVLogger(save_dir=log_path, name=METRICS_SUBDIR)
 
     return loggers
@@ -254,6 +284,9 @@ def main(args, config_overrides=None):
     # Save the final configuration
     if rank_zero and log_path and not (log_path / "settings.yaml").exists():
         configuration.save_config(log_path / "settings.yaml", config)
+    
+    if "comet" in loggers:
+        loggers["comet"].log_hyperparams(OmegaConf.to_container(config, resolve=True))
 
     if "tensorboard" in loggers:
         loggers["tensorboard"].log_hyperparams(config)

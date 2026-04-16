@@ -1,5 +1,5 @@
 experiment_group: rapid
-experiment_name: coco_base14_dinov2smm
+experiment_name: coco_vlm_rapid
 seed: 1
 
 globals:
@@ -23,6 +23,7 @@ trainer:
   log_every_n_steps: 200
   val_check_interval: 2500
   gradient_clip_val: 1.0
+  # accumulate_grad_batches: 2
 
 optimizer:
   name: Adam
@@ -64,20 +65,24 @@ model:
     # hidden_dim: "${mul: ${globals.SLOT_DIM}, 2}"
 
   encoder:
+    main_features_key: "blocks26"
     backbone:
-      name: TimmExtractorv2
-      model: ${globals.VIT_MODEL}
+      name: VLAExtractor
+      model: "openvla/openvla-7b"
       features:
-      - vit_block12
-      - vit_block11
-      - vit_block10
+      - fused_featurizer.blocks.24
+      - fused_featurizer.blocks.25
+      - fused_featurizer.blocks.26
       dim: ${globals.SLOT_DIM}
       drop: true
       mode: hc
+      featurizer_name: siglip
       proj_type: nonlinear
       frozen: true
       pretrained: true
-      last_blocks: 3
+      num_blocks: 3
+      return_attn: False
+      return_qkv: False
       model_kwargs:
         dynamic_img_size: True
     # output_transform:
@@ -117,7 +122,7 @@ model:
   decoder:
     name: MLPDecoder
     inp_dim: ${globals.SLOT_DIM}
-    outp_dim: ${globals.FEAT_DIM}
+    outp_dim: 1152
     hidden_dims: [2048, 2048, 2048]
     n_patches: ${globals.NUM_PATCHES}
     # final_conv: null # 'wnconv'

@@ -20,16 +20,19 @@ class ModelConfig:
     mask_resizers: Optional[Dict[str, ModuleConfig]] = None
     losses: Optional[Dict[str, ModuleConfig]] = None
     loss_weights: Optional[Dict[str, float]] = None
+    threshold_for_guidance_loss: Optional[float] = None
     mode: str = "default"
     input_type: str = "image"
     target_type: str = "features"
     target_encoder_input: Optional[str] = None
+    mask_size: int = 16
     visualize: bool = False
     eval_mode_config: Optional[Dict[str, Any]] = None
     visualize_every_n_steps: Optional[int] = 1000
     masks_to_visualize: Optional[List[str]] = None
     load_weights: Optional[str] = None
     modules_to_load: Optional[Dict[str, str]] = None
+    sam: Optional[ModuleConfig] = None
 
 
 @dataclass

@@ -9,6 +9,7 @@ from torch import nn
 import torch.nn.functional as F
 from torchvision.utils import make_grid
 from torchvision import transforms
+from ultralytics.utils.ops import scale_masks
 
 from ocl import configuration, losses, modules, optimizers, utils, visualizations
 from ocl.data.transforms import Denormalize, Normalize
@@ -23,12 +24,25 @@ def build(
     optimizer_builder = optimizers.OptimizerBuilder(**optimizer_config)
     mode = model_config.get("mode", "default")
     initializer = modules.build_initializer(model_config.initializer)
-    if mode == "smm" or mode == "tsmm" or "hc" in mode:
+    if mode == "smm" or mode == "tsmm" or "hc" in mode or mode == "samsa":
         encoder = modules.build_encoder(model_config.encoder, "HCEncoder")
     else:
         encoder = modules.build_encoder(model_config.encoder, "FrameEncoder")
     grouper = modules.build_grouper(model_config.grouper)
     decoder = modules.build_decoder(model_config.decoder)
+    if mode == "samsa":
+        sam = modules.build_sam(model_config.sam)
+        #     sam_model_name=model_config.sam.sam_model_name,
+        #     use_box=model_config.sam.use_box,
+        #     use_mask=model_config.sam.use_mask,
+        #     use_point=model_config.sam.use_point,
+        #     refine_iters=model_config.sam.refine_iters,
+        #     in_mask_size=model_config.sam.in_mask_size,
+        #     in_image_size=model_config.sam.in_image_size,
+        #     resize_mode=model_config.sam.resize_mode,
+        # )
+    else:
+        sam = None
 
     target_encoder = None
     if model_config.target_encoder:
@@ -37,7 +51,7 @@ def build(
             assert (
                 model_config.target_encoder_input is not None
             ), "Please specify `target_encoder_input`."
-        elif mode == "smm" or mode == "tsmm":
+        elif mode == "smm" or mode == "tsmm" or mode == "samsa":
             target_encoder = modules.build_encoder(model_config.target_encoder, "HCEncoder")
             assert (
                 model_config.target_encoder_input is not None
@@ -46,6 +60,7 @@ def build(
     current_step = model_config.grouper.get("step", 0)
     input_type = model_config.get("input_type", "image")
     image_size = model_config.get("image_size", 224)
+    mask_size = model_config.get("mask_size", 16)
     if input_type == "image":
         processor = modules.LatentProcessor(grouper, predictor=None)
     elif input_type == "video":
@@ -94,6 +109,8 @@ def build(
             name: losses.build({**loss_defaults, **loss_config})
             for name, loss_config in model_config.losses.items()
         }
+        # if model_config.get("threshold_for_guidance_loss") is not None:
+        #     threshold_for_gl = model_config.get("threshold_for_guidance_loss")
 
     if model_config.mask_resizers:
         mask_resizers = {
@@ -134,13 +151,16 @@ def build(
         processor,
         decoder,
         loss_fns,
+        sam=sam,
         loss_weights=model_config.get("loss_weights", None),
+        threshold_for_gl=model_config.get("threshold_for_guidance_loss"),
         target_encoder=target_encoder,
         train_metrics=train_metrics,
         val_metrics=val_metrics,
         mask_resizers=mask_resizers,
         input_type=input_type,
         image_size=image_size,
+        mask_size=mask_size,
         mode=mode,
         current_step=current_step,
         target_encoder_input=model_config.get("target_encoder_input", None),
@@ -165,9 +185,11 @@ class ObjectCentricModel(pl.LightningModule):
         decoder: nn.Module,
         loss_fns: Dict[str, losses.Loss],
         *,
+        sam: Optional[nn.Module] = None,
         mode: str = "default",
         current_step: int,
         loss_weights: Optional[Dict[str, float]] = None,
+        threshold_for_gl: Optional[float] = None,
         target_encoder: Optional[nn.Module] = None,
         train_metrics: Optional[Dict[str, torchmetrics.Metric]] = None,
         val_metrics: Optional[Dict[str, torchmetrics.Metric]] = None,
@@ -188,8 +210,21 @@ class ObjectCentricModel(pl.LightningModule):
         self.resolution = image_size
         self.mask_size = mask_size
         self.decoder = decoder
+        self.sam = sam
+        self.threshold_for_loss = threshold_for_gl
+        # if sam is not None:
+        #     for param in self.encoder.parameters():
+        #         param.requires_grad = False
+            
+        #     for param in self.initializer.parameters():
+        #         param.requires_grad = False
+
+        #     for param in self.processor.parameters():
+        #         param.requires_grad = False
+        
         self.target_encoder = target_encoder
         self.mode = mode
+        print(self.mode)
         self.current_step = current_step
 
         if loss_weights is not None:
@@ -211,7 +246,13 @@ class ObjectCentricModel(pl.LightningModule):
         self.mask_resizers["segmentation"] = modules.Resizer(
             video_inputs=input_type == "video", resize_mode="nearest-exact"
         )
+        # if sam is not None:
+        #     self.mask_resizers["sam"] = modules.Resizer(
+        #         video_inputs=input_type == "video", resize_mode="nearest-exact"
+        #     )
         self.mask_soft_to_hard = modules.SoftToHardMask()
+        # self.mask_soft_to_hard_for_dec = modules.SoftToHardMask(use_threshold=True, threshold=0.45)
+        self.mask_soft_to_hard_for_sam = modules.SoftToHardMask(use_threshold=True, threshold=0.)#self.sam.model.mask_threshold)
         self.train_metrics = torch.nn.ModuleDict(train_metrics)
         self.val_metrics = torch.nn.ModuleDict(val_metrics)
 
@@ -429,6 +470,7 @@ class ObjectCentricModel(pl.LightningModule):
         return input_points, input_labels
 
     def forward(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
+        # print(inputs.keys())
         encoder_input = inputs[self.input_key]  # batch [x n_frames] x n_channels x height x width
         assert encoder_input.ndim == self.expected_input_dims
         images = encoder_input
@@ -439,7 +481,7 @@ class ObjectCentricModel(pl.LightningModule):
         # print('save images')
         encoder_output = self.encoder(encoder_input)
         features = encoder_output["features"]
-        if self.mode == "smm" or self.mode == "tsmm" or self.mode == "classic_smm": 
+        if self.mode == "smm" or self.mode == "tsmm" or self.mode == "classic_smm" or self.mode == "samsa": 
             slots_initial = self.initializer(inputs=features)
             processor_output = self.processor(slots_initial, features) # arg№2 = inputs, self.current_step
             # if processor_output["corrector"].get("kl_loss") is not None:
@@ -527,14 +569,55 @@ class ObjectCentricModel(pl.LightningModule):
         #     # np.save('pseudo_gts.npy', decoder_output["pseudo_gts"].cpu().detach().numpy())
         #     # print('save pseudo_gts')
         #     # decoder_output["pseudo_gts"] = decoder_output["pseudo_gts"].softmax(dim=1)
-        
+        # print(decoder_output["masks"].unflatten(2, (self.mask_size, self.mask_size)).shape)
+        # decoder_output["masks_for_sam"] = scale_masks(
+        #     decoder_output["masks"].unflatten(2, (self.mask_size, self.mask_size)), 
+        #     self.sam.sam_size, padding=False
+        # ).flatten(start_dim=2, end_dim=3)
         outputs = {
             "batch_size": batch_size,
             "encoder": encoder_output,
             "processor": processor_output,
             "decoder": decoder_output,
         }
-        outputs["targets"] = self.get_targets(inputs, outputs)
+        if self.mode == "samsa":
+            b, k = decoder_output["masks"].shape[:2]
+            # print([decoder_output[key].shape for key in decoder_output.keys()])
+            decoder_masks = decoder_output["masks"].view(b, k, self.mask_size, self.mask_size)
+            outputs["sam"] = self.sam.improve_masks(
+                image=denorm(encoder_input), 
+                ref_masks=decoder_masks,
+            )
+            # outputs["sam"]["sam_masks"] = self.mask_resizers.get("segmentation")(
+            #     outputs["sam"]["sam_masks_hard"], decoder_masks, # inputs[self.input_key]
+            # ).flatten(start_dim=2, end_dim=3).to(decoder_masks.device)
+            # print(f"SAM mask {outputs['sam']['sam_masks'].shape}")
+            # sam_masks_metrics_hard = self.mask_resizers.get("segmentation")(
+            #     outputs["sam"]["sam_masks"], decoder_masks, # inputs[self.input_key]
+            # ) # outputs["sam"].get("sam_masks_hard").unflatten(2, (self.resolution, self.resolution))
+            # outputs["sam"]["sam_masks_hard"] = self.mask_resizers.get("segmentation")(
+            #     self.mask_soft_to_hard_for_sam(outputs["sam"]["sam_masks"]), 
+            #     decoder_masks, # inputs[self.input_key]
+            # ).flatten(start_dim=2, end_dim=3) # outputs["sam"].get("sam_masks_hard").unflatten(2, (self.resolution, self.resolution))
+            # print(outputs["sam"]["sam_masks_hard"].shape, decoder_output["masks"].shape)
+            outputs["sam"]["sam_masks_hard"] = self.mask_soft_to_hard_for_sam(
+                outputs["sam"]["sam_masks"],
+            )#.flatten(start_dim=2, end_dim=3) #.float()
+            outputs["sam"]["sam_masks_hard"] = self.mask_resizers.get("segmentation")(
+                outputs["sam"]["sam_masks_hard"], decoder_masks, # inputs[self.input_key]
+            ).flatten(start_dim=2, end_dim=3)
+            # outputs["sam"]["sam_masks_hard"] = self.mask_soft_to_hard_for_sam(torch.tensor(
+            #     (decoder_masks > 0.45) & outputs["sam"]["sam_masks_hard"].bool(),
+            # )).flatten(start_dim=2, end_dim=3)
+            # outputs["sam"]["sam_masks_hard"] = self.mask_soft_to_hard_for_sam(
+            #     outputs["sam"]["sam_masks_hard"],
+            # ).to(decoder_masks.device).flatten(start_dim=2, end_dim=3)
+            # print(outputs["sam"]["sam_masks_hard"].shape, outputs["sam"]["sam_masks_hard"].dtype)
+            outputs["targets"] = self.get_targets(inputs, outputs)
+            # print(self.trainer.global_step)
+        else:
+            outputs["targets"] = self.get_targets(inputs, outputs)
+        
 
         return outputs
 
@@ -556,6 +639,7 @@ class ObjectCentricModel(pl.LightningModule):
             masks_for_vis_hard = self.mask_soft_to_hard(masks_for_vis)
             target_masks = inputs.get("segmentations")
             if target_masks is not None and masks_for_vis.shape[-2:] != target_masks.shape[-2:]:
+                # print("Target is not None")
                 masks_for_metrics = resizer(masks, target_masks)
                 masks_for_metrics_hard = self.mask_soft_to_hard(masks_for_metrics)
             else:
@@ -566,15 +650,46 @@ class ObjectCentricModel(pl.LightningModule):
     @torch.no_grad()
     def aux_forward(self, inputs: Dict[str, Any], outputs: Dict[str, Any]) -> Dict[str, Any]:
         """Compute auxilliary outputs only needed for metrics and visualisations."""
+        # print(self.mask_resizers, inputs.keys(), self.input_key, self.sam.model.mask_threshold)
         decoder_masks = outputs["decoder"].get("masks")
         decoder_masks, decoder_masks_hard, decoder_masks_metrics_hard = self.process_masks(
             decoder_masks, inputs, self.mask_resizers.get("decoder")
         )
+        # print(f"Decoder masks: dec_masks {decoder_masks.shape}, dec_hard {decoder_masks_hard.shape}, dec_hard_vis {decoder_masks_metrics_hard.shape, decoder_masks_metrics_hard.dtype}")
         conv_masks = outputs["decoder"].get("conv_masks")
         conv_masks, conv_masks_hard, conv_masks_metrics_hard = self.process_masks(
             conv_masks, inputs, self.mask_resizers.get("decoder")
         )
-
+        sam_masks = None
+        sam_masks_hard = None
+        sam_masks_metrics_hard = None
+        if self.mode == "samsa":
+            # sam_masks = outputs["sam"].get("sam_masks")
+            # sam_masks_hard = sam_masks
+            # sam_masks = outputs["sam"].get("sam_masks_hard")
+            # sam_masks_hard = outputs["sam"].get("sam_masks_hard")
+            sam_masks_hard = self.mask_resizers.get("segmentation")(
+                outputs["sam"].get("sam_masks_hard").unflatten(2, (self.mask_size, self.mask_size)), 
+                inputs[self.input_key],
+            )
+            sam_masks = sam_masks_hard
+            # sam_masks = self.mask_resizers.get("decoder")(
+            #     outputs["sam"].get("norm_masks").flatten(start_dim=2, end_dim=3), inputs[self.input_key]
+            # )
+            # sam_masks_hard = self.mask_resizers.get("segmentation")(
+            #     outputs["sam"].get("sam_masks_hard").unflatten(2, self.sam.sam_size), 
+            #     inputs[self.input_key],
+            # )
+            # sam_masks_metrics_hard = outputs["sam"].get("sam_masks_hard").unflatten(2, (self.resolution, self.resolution))
+            # sam_masks_metrics_hard = self.mask_resizers.get("decoder")(
+            #     sam_masks, inputs.get("segmentations")
+            # ) # outputs["sam"].get("sam_masks_hard").unflatten(2, (self.resolution, self.resolution))
+            # sam_masks_metrics_hard = self.mask_soft_to_hard_for_sam(sam_masks_metrics_hard)
+            sam_masks_metrics_hard = sam_masks_hard # outputs["sam"]["sam_masks_hard"].unflatten(2, (self.resolution, self.resolution))
+            # sam_masks, sam_masks_hard, sam_masks_metrics_hard = self.process_masks(
+            #     sam_masks, inputs, self.mask_resizers.get("decoder")
+            # )
+            # print(f"SAM masks: sam_masks {sam_masks.shape}, sam_hard {sam_masks_hard.shape}, sam_hard_vis {sam_masks_metrics_hard.shape, sam_masks_metrics_hard.dtype}")
         grouping_masks = outputs["processor"]["corrector"].get("masks")
         grouping_masks, grouping_masks_hard, grouping_masks_metrics_hard = self.process_masks(
             grouping_masks, inputs, self.mask_resizers.get("grouping")
@@ -628,13 +743,13 @@ class ObjectCentricModel(pl.LightningModule):
             aux_outputs["conv_grouping_masks_vis_hard"] = conv_grouping_masks_hard
         if conv_grouping_masks_metrics_hard is not None:
             aux_outputs["conv_grouping_masks_hard"] = conv_grouping_masks_metrics_hard
-        # if self.mode == "default":
-        #     if sam_masks is not None:
-        #         aux_outputs["sam_masks"] = sam_masks
-        #     if sam_masks_hard is not None:
-        #         aux_outputs["sam_masks_vis_hard"] = sam_masks_hard 
-        #     if sam_masks_metrics_hard is not None:
-        #         aux_outputs["sam_masks_hard"] = sam_masks_metrics_hard.to(device="cuda:0")
+        
+        if sam_masks is not None:
+            aux_outputs["sam_masks"] = sam_masks
+        if sam_masks_hard is not None:
+            aux_outputs["sam_masks_vis_hard"] = sam_masks_hard 
+        if sam_masks_metrics_hard is not None:
+            aux_outputs["sam_masks_hard"] = sam_masks_metrics_hard # .to(device="cuda:0")
 
         return aux_outputs
 
@@ -707,8 +822,15 @@ class ObjectCentricModel(pl.LightningModule):
             # if name == "loss_tsl":
             #     losses[name] = self.trajectory_smoothness_loss(probs_maps.view(b, t, k, int(d**0.5), int(d**0.5)))
             # else:
-            prediction = loss_fn.get_prediction(outputs).to("cuda:0")
-            target = outputs["targets"][name].to("cuda:0")
+            # if name == "loss_featrec" and self.trainer.global_step < 1300:
+            #     print(f" 1: {self.trainer.global_step}")
+            #     continue
+            # if name == "loss_featrec" and losses["guidance_loss"] > self.threshold_for_loss:
+            #     print(self.trainer.global_step)
+            #     continue
+            prediction = loss_fn.get_prediction(outputs)#.to("cuda:0")
+            target = outputs["targets"][name]#.to("cuda:0")
+            # print(prediction.shape, target.shape)
             losses[name] = loss_fn(prediction, target)
             # print(f"{name}: {losses[name]}")
         # print(self.loss_weights.keys())

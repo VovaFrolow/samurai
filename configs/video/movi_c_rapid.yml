@@ -20,10 +20,10 @@ globals:
 
 trainer:
   max_steps: 400000 # 100000
-  log_every_n_steps: 500
-  val_check_interval: 4000 # 1000
+  log_every_n_steps: 400
+  val_check_interval: 2000 # 1000
   gradient_clip_val: 0.05 # 0.05
-  accumulate_grad_batches: 4
+  accumulate_grad_batches: 2
 
 optimizer:
   name: Adam
@@ -211,30 +211,30 @@ val_metrics:
     video_input: true
     pred_key: decoder_masks_hard
     true_key: segmentations
-  conv_ari:
-    name: VideoARI
-    ignore_background: true
-    pred_key: conv_masks_hard
-    true_key: segmentations
-  conv_image_ari:
-    name: ImageARI
-    ignore_background: true
-    video_input: true
-    pred_key: conv_masks_hard
-    true_key: segmentations
-  conv_mbo:
-    name: VideoIoU
-    matching: overlap
-    ignore_background: true
-    pred_key: conv_masks_hard
-    true_key: segmentations
-  conv_image_mbo:
-    name: ImageIoU
-    matching: overlap
-    ignore_background: true
-    video_input: true
-    pred_key: conv_masks_hard
-    true_key: segmentations
+  # conv_ari:
+  #   name: VideoARI
+  #   ignore_background: true
+  #   pred_key: conv_masks_hard
+  #   true_key: segmentations
+  # conv_image_ari:
+  #   name: ImageARI
+  #   ignore_background: true
+  #   video_input: true
+  #   pred_key: conv_masks_hard
+  #   true_key: segmentations
+  # conv_mbo:
+  #   name: VideoIoU
+  #   matching: overlap
+  #   ignore_background: true
+  #   pred_key: conv_masks_hard
+  #   true_key: segmentations
+  # conv_image_mbo:
+  #   name: ImageIoU
+  #   matching: overlap
+  #   ignore_background: true
+  #   video_input: true
+  #   pred_key: conv_masks_hard
+  #   true_key: segmentations
   slots_ari:
     name: VideoARI
     ignore_background: true

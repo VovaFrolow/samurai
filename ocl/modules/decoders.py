@@ -230,7 +230,7 @@ class SlotMixerDecoder(nn.Module):
             self.proj = nn.Sequential(
                 nn.Linear(proj_slots["inp_dim"], proj_slots["hidden_dim"]),
                 nn.ReLU(),
-                nn.Dropout(proj_slots["dropout"]),
+                # nn.Dropout(proj_slots["dropout"]),
                 nn.Linear(proj_slots["hidden_dim"], proj_slots["outp_dim"]),
                 nn.Dropout(proj_slots["dropout"])
             )

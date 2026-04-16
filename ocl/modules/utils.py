@@ -314,16 +314,20 @@ def soft_to_hard_mask(
     assert masks.ndim == 4 or masks.ndim == 5
     min = torch.min(masks)
     max = torch.max(masks)
-    if min < 0:
-        raise ValueError(f"Minimum mask value should be >=0, but found {min.cpu().numpy()}")
-    if max > 1.1:
-        raise ValueError(f"Maximum mask value should be <=1.1, but found {max.cpu().numpy()}")
+    if not use_threshold:
+        if min < 0:
+            raise ValueError(f"Minimum mask value should be >=0, but found {min.cpu().numpy()}")
+        if max > 1.1:
+            raise ValueError(f"Maximum mask value should be <=1.1, but found {max.cpu().numpy()}")
 
     if use_threshold:
         masks = masks > threshold
 
     if convert_one_hot:
-        mask_argmax = torch.argmax(masks, dim=-3)
+        if masks.dtype in (torch.bool, bool, np.bool_):
+            mask_argmax = torch.argmax(masks.float(), dim=-3)
+        else:
+            mask_argmax = torch.argmax(masks, dim=-3)
         masks = nn.functional.one_hot(mask_argmax, masks.shape[-3]).to(torch.float32)
         masks = masks.transpose(-1, -2).transpose(-2, -3)  # B, [F,] H, W, C -> B, [F], C, H, W
 

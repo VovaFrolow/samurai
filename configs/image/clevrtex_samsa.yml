@@ -1,17 +1,17 @@
-experiment_group: rapid
-experiment_name: coco_base14_dinov2smm
+experiment_group: samsa
+experiment_name: clevrtex_rapid
 seed: 1
 
 globals:
   INPUT_TYPE: image
-  MODE: smm
-  NUM_SLOTS: 7 # 7 [6]
+  MODE: samsa
+  NUM_SLOTS: 11 # 7 [6]
   SLOT_DIM: 256 # 256
-  VIT_MODEL: vit_base_patch14_dinov2
+  VIT_MODEL: vit_base_patch8_224_dino
   FEAT_DIM: "${config_prop: VIT_PARAMS, ${.VIT_MODEL}, FEAT_DIM}"
   NUM_PATCHES: "${config_prop: VIT_PARAMS, ${.VIT_MODEL}, NUM_PATCHES}"
   NUM_GPUS: 1
-  BATCH_SIZE_PER_GPU: 64 # 128  
+  BATCH_SIZE_PER_GPU: 1 # 128  
   TOTAL_BATCH_SIZE: "${mul: ${.NUM_GPUS}, ${.BATCH_SIZE_PER_GPU}}"
   BASE_LR: 0.0004 # [0.0004]
   STEP: null
@@ -23,6 +23,7 @@ trainer:
   log_every_n_steps: 200
   val_check_interval: 2500
   gradient_clip_val: 1.0
+  accumulate_grad_batches: 64
 
 optimizer:
   name: Adam
@@ -54,9 +55,39 @@ optimizer:
 model:
   input_type: ${globals.INPUT_TYPE}
   mode: ${globals.MODE}
+  mask_size: 28
   visualize: true
   visualize_every_n_steps: 2500
+  load_weights: "logs/rapid/2026-03-14-11-23-55_coco_base14_dinosmm/checkpoints/step=34000.ckpt"
+  masks_to_visualize: ['decoder', 'grouping', 'sam']
   
+  # threshold_for_guidance_loss: 193
+  losses:
+    guidance_loss:
+      name: CrossEntropyLoss
+      pred_key: decoder.masks #_for_sam
+      target_key: sam.sam_masks_hard
+    # loss_featrec:
+    #   name: MSELoss
+    #   pred_dims:
+    #     - 0
+    #     - ${globals.FEAT_DIM}
+  loss_weights:
+    guidance_loss: 0.01
+    # loss_featrec: 1.0
+
+  sam:
+    name: SAM
+    sam_model_name: sam2.1_l.pt # sam2_l.pt
+    use_box: True
+    use_mask: False
+    use_point: True
+    refine_iters: 5
+    in_mask_size: 28
+    in_image_size: 224
+    resize_mode: resize
+    # threshold_for_points: 0.2
+  # val/sam_ari=0.102, val/sam_fg_ari=0.0432, val/sam_mbo=0.168, val/sam_miou=0.141
   initializer:
     name: SMMInit
     n_slots: ${globals.NUM_SLOTS}
@@ -141,30 +172,48 @@ val_metrics:
     matching: overlap
     pred_key: decoder_masks_hard
     true_key: segmentations
-  # mbo_c:
-  #   name: ImageIoU
-  #   ignore_overlaps: true
-  #   matching: overlap
-  #   pred_key: decoder_masks_hard
-  #   true_key: sem_segmentations
   miou:
     name: ImageIoU
     ignore_overlaps: true
     matching: hungarian
     pred_key: decoder_masks_hard
     true_key: segmentations
-  # miou_c:
-  #   name: ImageIoU
-  #   ignore_overlaps: true
-  #   matching: hungarian
-  #   pred_key: decoder_masks_hard
-  #   true_key: sem_segmentations
   # fg_miou:
   #   name: ImageIoU
   #   ignore_overlaps: true
   #   ignore_background: true
   #   matching: hungarian
   #   pred_key: decoder_masks_hard
+  #   true_key: segmentations
+  sam_ari:
+    name: ImageARI
+    ignore_overlaps: true
+    pred_key: sam_masks_hard
+    true_key: segmentations
+  sam_fg_ari:
+    name: ImageARI
+    ignore_overlaps: true
+    ignore_background: true
+    pred_key: sam_masks_hard
+    true_key: segmentations
+  sam_mbo:
+    name: ImageIoU
+    ignore_overlaps: true
+    matching: overlap
+    pred_key: sam_masks_hard
+    true_key: segmentations
+  sam_miou:
+    name: ImageIoU
+    ignore_overlaps: true
+    matching: hungarian
+    pred_key: sam_masks_hard
+    true_key: segmentations
+  # sam_fg_miou:
+  #   name: ImageIoU
+  #   ignore_overlaps: true
+  #   ignore_background: true
+  #   matching: hungarian
+  #   pred_key: sam_masks_hard
   #   true_key: segmentations
   slots_ari:
     name: ImageARI
@@ -183,24 +232,12 @@ val_metrics:
     matching: overlap
     pred_key: grouping_masks_hard
     true_key: segmentations
-  # slots_mbo_c:
-  #   name: ImageIoU
-  #   ignore_overlaps: true
-  #   matching: overlap
-  #   pred_key: grouping_masks_hard
-  #   true_key: sem_segmentations
   slots_miou:
     name: ImageIoU
     ignore_overlaps: true
     matching: hungarian
     pred_key: grouping_masks_hard
     true_key: segmentations
-  # slots_miou_c:
-  #   name: ImageIoU
-  #   ignore_overlaps: true
-  #   matching: hungarian
-  #   pred_key: grouping_masks_hard
-  #   true_key: sem_segmentations
   # slots_fg_miou:
   #   name: ImageIoU
   #   ignore_overlaps: true
@@ -210,11 +247,10 @@ val_metrics:
   #   true_key: segmentations
 
 dataset:
-  train_shards: "coco/coco-train-{000000..000924}.tar"
-  val_shards: "coco/coco-validation-{000000..000039}.tar"
+  train_shards: "clevrtex/clevrtex-train-{000000..000312}.tar"
+  val_shards: "clevrtex/clevrtex-val-{000000..000078}.tar"
   batch_size: ${globals.BATCH_SIZE_PER_GPU}
-  val_size: 5000
-  # val_batch_size: 128
+  val_size: 10000
   num_workers: 4
   num_val_workers: 1
   train_pipeline:
@@ -223,18 +259,18 @@ dataset:
     is_video_dataset: false
     shuffle_size: 2048
     transforms:
-      name: coco_train
-      crop_type: short_side_resize_random
+      name: clevrtex_train
+      # crop_type: short_side_resize_random
       type: ${globals.INPUT_TYPE}
       input_size: 224
-      h_flip_prob: 0.5
+      # h_flip_prob: 0.5
   val_pipeline:
     name: ${globals.INPUT_TYPE}
     keys: [image, segmentations]
     is_video_dataset: false
     transforms:
-      name: coco_val
-      crop_type: central
+      name: clevrtex_val
+      # crop_type: central
       type: ${globals.INPUT_TYPE}
       input_size: 224
-      num_classes: 63
+      num_classes: 11

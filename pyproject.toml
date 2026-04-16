@@ -3,7 +3,7 @@ name = "rapid"
 version = "0.1.0"
 description = "RAPID: Robust Adaptive Probabilistic Inference with DINO Features"
 authors = [
-  "*** <***>"
+  "Vladimir Frolov <frolov.vladimir@phystech.edu>"
 ]
 readme = "README.md"
 

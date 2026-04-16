@@ -164,3 +164,5 @@ cython_debug/
 .ruff_cache
 logs/
 lightning_logs/
+datasets/
+sam2.1_l.pt
