@@ -45,6 +45,7 @@ class Config:
     val_metrics: Optional[Dict[str, ModuleConfig]] = None
 
     globals: Optional[Dict[str, Any]] = None
+    comet_api_key: Optional[str] = None
     experiment_name: Optional[str] = None
     experiment_group: Optional[str] = None
     seed: Optional[int] = None

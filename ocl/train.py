@@ -4,7 +4,7 @@ import os
 import pathlib
 import random
 import warnings
-import wandb
+# import wandb
 import comet_ml
 from typing import Any, Dict, Optional
 
@@ -95,33 +95,38 @@ def _setup_loggers(args, log_path: pathlib.Path, config=None) -> Dict[str, pl.lo
     loggers = {}
     
     # Comet ML Logger - для реального времени
-    try:
-        from pytorch_lightning.loggers import CometLogger
-        
-        comet_logger = CometLogger(
-            api_key="FXAkSZjhnizJwl1sx3ZesI7M0",
-            project_name=config.get("experiment_group", "default-project"),  # Используем группу экспериментов
-            experiment_name=config.get("experiment_name", f"exp-{random.randint(1000, 9999)}"),
-            save_dir=str(log_path),
-            # Критически важные параметры для реального времени:
-            # log_graph=True,                    # Логировать архитектуру модели
-            # log_env_details=True,              # Детали окружения
-            log_env_gpu=True,                  # Информация о GPU
-            log_env_cpu=True,                  # Информация о CPU
-            # log_env_host=True,                 # Информация о хосте
-            # parse_args=True,                   # Парсить аргументы командной строки
-            # Настройки для реального времени:
-            # upload_source_files=True,          # Загружать исходный код
-            # display_summary_level=2,           # Уровень детализации
-            online_mode=True,                  # Режим онлайн (обязательно!)
-        )
-        loggers["comet"] = comet_logger
-        log_info("Comet ML logger initialized in ONLINE mode for real-time monitoring")
-        
-    except ImportError:
-        log_info("Comet ML not installed, skipping Comet logging")
-    except Exception as e:
-        log_info(f"Failed to setup Comet ML: {e}")
+    comet_api_key = "comet_api_key"
+    if config is not None:
+        if comet_api_key not in config or config.get(comet_api_key) is None:
+            log_info(f"Comet API key not found in config. Set {comet_api_key} in config.")
+        else:
+            try:
+                from pytorch_lightning.loggers import CometLogger
+
+                comet_logger = CometLogger(
+                    api_key=config.get(comet_api_key),
+                    project_name=config.get("experiment_group", "default-project"),  # Используем группу экспериментов
+                    experiment_name=config.get("experiment_name", f"exp-{random.randint(1000, 9999)}"),
+                    save_dir=str(log_path),
+                    # Критически важные параметры для реального времени:
+                    # log_graph=True,                    # Логировать архитектуру модели
+                    # log_env_details=True,              # Детали окружения
+                    log_env_gpu=True,                  # Информация о GPU
+                    log_env_cpu=True,                  # Информация о CPU
+                    # log_env_host=True,                 # Информация о хосте
+                    # parse_args=True,                   # Парсить аргументы командной строки
+                    # Настройки для реального времени:
+                    # upload_source_files=True,          # Загружать исходный код
+                    # display_summary_level=2,           # Уровень детализации
+                    online_mode=True,                  # Режим онлайн (обязательно!)
+                )
+                loggers["comet"] = comet_logger
+                log_info("Comet ML logger initialized in ONLINE mode for real-time monitoring")
+
+            except ImportError:
+                log_info("Comet ML not installed, skipping Comet logging")
+            except Exception as e:
+                log_info(f"Failed to setup Comet ML: {e}")
 
     # TensorBoard Logger
     if not args.no_tensorboard:
