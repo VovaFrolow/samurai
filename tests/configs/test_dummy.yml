@@ -33,7 +33,14 @@ model:
     name: SMMInit
     n_slots: ${globals.NUM_SLOTS}
     dim: ${globals.SLOT_DIM}
-    # hidden_dim: "${mul: ${globals.SLOT_DIM}, 2}"
+
+  background_slot:
+    use_background_slot: false
+    feed_into_processor: true
+    initializer:
+      name: SMMInit  # FixedLearnedInit
+      n_slots: 1
+      dim: ${globals.SLOT_DIM}
 
   encoder:
     backbone:

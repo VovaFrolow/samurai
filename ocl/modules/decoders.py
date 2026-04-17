@@ -10,16 +10,18 @@ from ocl.utils import config_as_kwargs, make_build_fn
 
 
 @make_build_fn(__name__, "decoder")
-def build(config, name: str):
+def build(config, name: str, **kwargs):
     if name == "SpatialBroadcastDecoder":
         output_transform = None
         if config.get("output_transform"):
             output_transform = utils.build_module(config.output_transform)
 
+        decoder_kwargs = config_as_kwargs(config, ("backbone", "output_transform"))
+        decoder_kwargs.update(kwargs)
         return SpatialBroadcastDecoder(
             backbone=utils.build_module(config.backbone, default_group="networks"),
             output_transform=output_transform,
-            **config_as_kwargs(config, ("backbone", "output_transform")),
+            **decoder_kwargs,
         )
     elif name == "SlotMixerDecoder":
         # proj_slots = None
@@ -29,15 +31,17 @@ def build(config, name: str):
         if config.get("output_transform"):
             output_transform = utils.build_module(config.output_transform)
 
+        decoder_kwargs = config_as_kwargs(
+                config, ("allocator", "renderer", "output_transform", "pos_embed_mode", "proj_slots", "use_background_slot") # , "proj_slots"
+            )
+        decoder_kwargs.update(kwargs)
         return SlotMixerDecoder(
             allocator=utils.build_module(config.allocator, default_group="networks"),
             renderer=utils.build_module(config.renderer, default_group="networks") if config.renderer is not None else None,
             proj_slots=config.proj_slots,
             output_transform=output_transform,
             pos_embed_mode=config.get("pos_embed_mode", "add"),
-            **config_as_kwargs(
-                config, ("allocator", "renderer", "output_transform", "pos_embed_mode", "proj_slots") # , "proj_slots"
-            ),
+            **decoder_kwargs,
         )
     else:
         return None
@@ -54,6 +58,7 @@ class MLPDecoder(nn.Module):
         n_patches: int,
         activation: str = "relu",
         eval_output_size: Optional[Tuple[int]] = None,
+        use_background_slot: bool = False,
         # final_conv: Optional[str] = None,
         # kernel_size: Optional[int] = None,
     ):
@@ -61,6 +66,7 @@ class MLPDecoder(nn.Module):
         self.outp_dim = outp_dim
         self.n_patches = n_patches
         self.eval_output_size = list(eval_output_size) if eval_output_size else None
+        self.use_background_slot = use_background_slot
         # self.final_conv = WNConv(
         #     in_channels=1,
         #     out_channels=1,
@@ -88,6 +94,10 @@ class MLPDecoder(nn.Module):
         slots = slots + pos_emb
 
         recons, alpha = self.mlp(slots).split((self.outp_dim, 1), dim=-1)
+
+        if self.use_background_slot:
+            alpha = alpha.clone()
+            alpha[:, -1] = 0
 
         masks = torch.softmax(alpha, dim=1)
         recon = torch.sum(recons * masks, dim=1)
@@ -117,6 +127,7 @@ class SpatialBroadcastDecoder(nn.Module):
         backbone_dim: Optional[int] = None,
         pos_embed: Optional[nn.Module] = None,
         output_transform: Optional[nn.Module] = None,
+        use_background_slot: bool = False,
     ):
         super().__init__()
         self.outp_dim = outp_dim
@@ -130,6 +141,7 @@ class SpatialBroadcastDecoder(nn.Module):
         else:
             self.pos_embed = pos_embed
 
+        self.use_background_slot = use_background_slot
         self.backbone = backbone
 
         if output_transform is None:
@@ -158,6 +170,9 @@ class SpatialBroadcastDecoder(nn.Module):
 
         outputs = einops.rearrange(outputs, "(b s) ... -> b s ...", b=bs, s=n_slots)
         recons, alpha = einops.unpack(outputs, [[self.outp_dim], [1]], "b s * h w")
+        if self.use_background_slot:
+            alpha = alpha.clone()
+            alpha[:, -1] = 0
 
         masks = torch.softmax(alpha, dim=1)
         recon = torch.sum(recons * masks, dim=1)

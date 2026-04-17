@@ -14,6 +14,7 @@ class ModelConfig:
     encoder: ModuleConfig
     grouper: ModuleConfig
     decoder: ModuleConfig
+    background_slot: Optional[ModuleConfig] = None
     predictor: Optional[ModuleConfig] = None
     target_encoder: Optional[ModuleConfig] = None
     latent_processor: Optional[ModuleConfig] = None

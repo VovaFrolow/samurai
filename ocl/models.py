@@ -23,13 +23,26 @@ def build(
 ):
     optimizer_builder = optimizers.OptimizerBuilder(**optimizer_config)
     mode = model_config.get("mode", "default")
+    background_slot_initializer = None
+    feed_background_slot_into_processor = False
+    background_slot_config = model_config.get('background_slot', None)
+    use_background_slot = background_slot_config is not None and background_slot_config.use_background_slot
+    if use_background_slot:
+        model_config.initializer.n_slots = model_config.initializer.n_slots - 1
+        feed_background_slot_into_processor = background_slot_config.feed_into_processor
+        if not feed_background_slot_into_processor:
+            model_config.grouper.num_slots = model_config.grouper.num_slots - 1
+            background_slot_config.initializer['same_output_dim'] = True
+
+        background_slot_initializer = modules.build_initializer(background_slot_config.initializer)
+
     initializer = modules.build_initializer(model_config.initializer)
     if mode == "smm" or mode == "tsmm" or "hc" in mode or mode == "samsa":
         encoder = modules.build_encoder(model_config.encoder, "HCEncoder")
     else:
         encoder = modules.build_encoder(model_config.encoder, "FrameEncoder")
     grouper = modules.build_grouper(model_config.grouper)
-    decoder = modules.build_decoder(model_config.decoder)
+    decoder = modules.build_decoder(model_config.decoder, use_background_slot=use_background_slot)
     if mode == "samsa":
         sam = modules.build_sam(model_config.sam)
         #     sam_model_name=model_config.sam.sam_model_name,
@@ -167,6 +180,8 @@ def build(
         visualize=model_config.get("visualize", False),
         visualize_every_n_steps=model_config.get("visualize_every_n_steps", 1000),
         masks_to_visualize=masks_to_visualize,
+        background_slot_initializer=background_slot_initializer,
+        feed_background_slot_into_processor=feed_background_slot_into_processor,
     )
 
     if model_config.load_weights:
@@ -201,6 +216,8 @@ class ObjectCentricModel(pl.LightningModule):
         visualize: bool = False,
         visualize_every_n_steps: Optional[int] = None,
         masks_to_visualize: Union[str, List[str]] = "decoder",
+        background_slot_initializer: Optional[nn.Module] = None,
+        feed_background_slot_into_processor: Optional[bool] = None,
     ):
         super().__init__()
         self.optimizer_builder = optimizer_builder
@@ -224,6 +241,8 @@ class ObjectCentricModel(pl.LightningModule):
         
         self.target_encoder = target_encoder
         self.mode = mode
+        self.background_slot_initializer = background_slot_initializer
+        self.feed_background_slot_into_processor = feed_background_slot_into_processor
         print(self.mode)
         self.current_step = current_step
 
@@ -287,6 +306,9 @@ class ObjectCentricModel(pl.LightningModule):
             "processor": self.processor,
             "decoder": self.decoder,
         }
+        if self.background_slot_initializer is not None:
+            modules["background_slot_initializer"] = self.background_slot_initializer
+
         return self.optimizer_builder(modules)
 
     def normalize_to_range(self, data, min_val=-14, max_val=6):
@@ -481,43 +503,25 @@ class ObjectCentricModel(pl.LightningModule):
         # print('save images')
         encoder_output = self.encoder(encoder_input)
         features = encoder_output["features"]
-        if self.mode == "smm" or self.mode == "tsmm" or self.mode == "classic_smm" or self.mode == "samsa": 
-            slots_initial = self.initializer(inputs=features)
-            processor_output = self.processor(slots_initial, features) # arg№2 = inputs, self.current_step
-            # if processor_output["corrector"].get("kl_loss") is not None:
-            #     self.kl_loss = processor_output["corrector"]["kl_loss"]
-            # processor_output = self.processor(slots_initial, inputs)
-        # elif self.mode == "default":
-        #     slots_initial = self.initializer(batch_size=batch_size)
-        #     processor_output = self.processor(slots_initial, features)
-        #     with torch.no_grad():
-        #         size = int(processor_output["corrector"]["masks"].shape[-1]**0.5)
-        #         attn_vis = processor_output["corrector"]["masks"].unflatten(-1, (size, size))
-        #         b, n, _, _ = attn_vis.shape
-        #         denorm = Denormalize(input_type=self.input_key)
-        #         images = denorm(encoder_input)
-        #         processor_output['pseudo_gts'] = torch.zeros((b, n, self.resolution*self.resolution))
-        #         processor_output["resized_masks"] = processor_output['pseudo_gts']
-        #         for img_idx in range(b):
-        #             img = images[img_idx].permute(1, 2, 0).cpu().detach().numpy().astype(np.uint8)
-        #             self.sam.set_image(img)
-        #             attn_vis_res = self.resize(attn_vis[img_idx])
-        #             processor_output["resized_masks"][img_idx] = attn_vis_res.to("cuda:0").flatten(-2, -1)
-        #             for mask_idx in range(attn_vis.shape[1]):
-        #                 mask, _, _ = self.sam.predict(
-        #                     mask_input = attn_vis_res[mask_idx].cpu().detach().numpy()[None, :, :], # attention_map
-        #                     multimask_output=False,
-        #                 )
-        #                 processor_output['pseudo_gts'][img_idx, mask_idx, ...] = torch.tensor(mask, device="cuda:0").flatten(-2, -1)
-        else:
-            slots_initial = self.initializer(batch_size=batch_size)
-            processor_output = self.processor(slots_initial, features)
+        slots_initial = self.initializer(inputs=features)
+        if self.background_slot_initializer is not None:
+            background_slot_initial = self.background_slot_initializer(inputs=features)
+            if self.feed_background_slot_into_processor:
+                slots_initial = torch.cat((slots_initial, background_slot_initial), dim=1)
+
+        processor_output = self.processor(slots_initial, features) # arg№2 = inputs, self.current_step
+        # if processor_output["corrector"].get("kl_loss") is not None:
+        #     self.kl_loss = processor_output["corrector"]["kl_loss"]
+        # processor_output = self.processor(slots_initial, inputs)
 
         # size = int(processor_output["corrector"]["masks"].shape[-1]**0.5)
         # attn_vis = processor_output["corrector"]["masks"].unflatten(-1, (size, size))
         # processor_output["resized_masks"] = self.resize(attn_vis).to("cuda:0").flatten(-2, -1)
         # print(processor_output["resized_masks"].shape)
         slots = processor_output["state"]
+        if self.background_slot_initializer is not None and not self.feed_background_slot_into_processor:
+            slots = torch.cat((slots, background_slot_initial), dim=1)
+
         decoder_output = self.decoder(slots)
         # np.save('att_masks.npy', processor_output["corrector"]["masks"].cpu().detach().numpy())
         # print('save att_masks', processor_output["corrector"]["masks"].shape, processor_output["corrector"]["masks"].flatten().shape)

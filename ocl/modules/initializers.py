@@ -28,8 +28,8 @@ class RandomInit(nn.Module):
             initial_std = dim**-0.5
         self.log_std = nn.Parameter(torch.log(torch.ones(1, 1, dim) * initial_std))
 
-    def forward(self, batch_size: int):
-        noise = torch.randn(batch_size, self.n_slots, self.dim, device=self.mean.device)
+    def forward(self, inputs: torch.Tensor):
+        noise = torch.randn(inputs.shape[0], self.n_slots, self.dim, device=self.mean.device)
         return self.mean + noise * self.log_std.exp()
 
 
@@ -45,8 +45,8 @@ class RandomSMMInit(nn.Module):
             initial_std = dim**-0.5
         self.log_std = nn.Parameter(torch.log(torch.ones(1, 1, 2*dim) * initial_std))
 
-    def forward(self, batch_size: int):
-        noise = torch.randn(batch_size, self.n_slots, self.dim, device=self.mean.device)
+    def forward(self, inputs: torch.Tensor):
+        noise = torch.randn(inputs.shape[0], self.n_slots, self.dim, device=self.mean.device)
         return self.mean + noise * self.log_std.exp()
 
 class SMMInit(nn.Module):
@@ -57,7 +57,8 @@ class SMMInit(nn.Module):
         n_slots: int, 
         dim: int, 
         hidden_dim: Optional[int] = None, # 128 (original), 256
-        initial_std: Optional[float] = None
+        initial_std: Optional[float] = None,
+        same_output_dim: bool = False,
     ):
         super().__init__()
         self.n_slots = n_slots
@@ -76,6 +77,10 @@ class SMMInit(nn.Module):
             initial_std = dim**-0.5
         self.log_std = nn.Parameter(torch.log(torch.ones(1, 1, dim) * initial_std))
         init.xavier_uniform_(self.log_std)
+        output_dim = dim
+        if not same_output_dim:
+            output_dim = dim * 2
+
         # self.nu = nn.Parameter(torch.ones(1, 1, dim) * 3.0)
         
         self.feat_agg = self.mu_proj = nn.Sequential(
@@ -87,12 +92,12 @@ class SMMInit(nn.Module):
         self.mu_init = nn.Sequential(
             nn.Linear(dim, hidden_dim),
             nn.GELU(), # nn.ReLU(inplace=True)
-            nn.Linear(hidden_dim, dim * 2)
+            nn.Linear(hidden_dim, output_dim)
         )
         self.sigma_init = nn.Sequential(
             nn.Linear(dim, hidden_dim),
             nn.GELU(), # nn.ReLU(inplace=True)
-            nn.Linear(hidden_dim, dim * 2)
+            nn.Linear(hidden_dim, output_dim)
         )
         # self.nu_init = nn.Sequential(
         #     nn.Linear(dim, hidden_dim),
@@ -251,5 +256,5 @@ class FixedLearnedInit(nn.Module):
             initial_std = dim**-0.5
         self.slots = nn.Parameter(torch.randn(1, n_slots, dim) * initial_std)
 
-    def forward(self, batch_size: int):
-        return self.slots.expand(batch_size, -1, -1)
+    def forward(self, inputs: torch.Tensor):
+        return self.slots.expand(inputs.shape[0], -1, -1)
