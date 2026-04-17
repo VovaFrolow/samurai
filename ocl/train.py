@@ -283,7 +283,7 @@ def main(args, config_overrides=None):
     model = models.build(config.model, config.optimizer, train_metrics, val_metrics)
 
     callbacks = _setup_callbacks(args, config, log_path, dataset)
-    loggers = _setup_loggers(args, log_path)
+    loggers = _setup_loggers(args, log_path, config)
     trainer_config = _setup_trainer_config(config.setdefault("trainer", {}))
 
     # Save the final configuration

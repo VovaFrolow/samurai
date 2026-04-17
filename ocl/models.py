@@ -1059,7 +1059,7 @@ class ObjectCentricModel(pl.LightningModule):
 
         if logger is not None:
             logger.experiment.add_image(
-                f"{name}/images", make_grid(data, nrow=n_examples), global_step=global_step
+                f"{name}/images", make_grid(data, nrow=n_examples).cpu(), global_step=global_step
             )
 
     @staticmethod
