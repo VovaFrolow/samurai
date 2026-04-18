@@ -30,9 +30,13 @@ def build(
     if use_background_slot:
         model_config.initializer.n_slots = model_config.initializer.n_slots - 1
         feed_background_slot_into_processor = background_slot_config.feed_into_processor
-        if not feed_background_slot_into_processor:
+        if feed_background_slot_into_processor:
+            if background_slot_config.initializer.name == 'FixedLearnedInit':
+                background_slot_config.initializer.dim = 2 * background_slot_config.initializer.dim
+        else:
             model_config.grouper.num_slots = model_config.grouper.num_slots - 1
-            background_slot_config.initializer['same_output_dim'] = True
+            if background_slot_config.initializer.name == 'SMMInit':
+                background_slot_config.initializer['same_output_dim'] = True
 
         background_slot_initializer = modules.build_initializer(background_slot_config.initializer)
 
