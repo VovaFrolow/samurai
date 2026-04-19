@@ -1,5 +1,5 @@
 experiment_group: rapid
-experiment_name: clevrtex_base14_dinosmm_bg
+experiment_name: clevrtex_base14_rapid_bg
 seed: 1
 
 globals:
